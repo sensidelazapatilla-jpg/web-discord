@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Creator Hub PRO - Versión Final</title>
+
+  <!-- Firebase compat para que todo funcione con el código actual -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+
+  <style>
+    body { font-family: Arial; background: linear-gradient(135deg, #0f172a, #1e293b); color:white; margin:0 }
+    header { background:#1e293b; padding:20px; text-align:center; font-size:28px; font-weight:bold; color:#22c55e; }
+    .container { padding:20px }
+    .card { background:#1e293b; padding:15px; margin:10px 0; border-radius:10px; box-shadow: 0 0 10px rgba(0,255,100,0.5); }
+    button { padding:10px; background:#22c55e; border:none; color:white; cursor:pointer; border-radius:5px; font-weight:bold; margin:3px; }
+    input { padding:8px; margin:5px; border-radius:5px; border:none; }
+    #adminPanel { border-top:2px solid #22c55e; padding-top:10px; margin-top:20px; }
+  </style>
+</head>
+<body>
+
+<header>Creator Hub PRO</header>
+
+<div class="container" id="auth">
+  <h2>Login / Registro</h2>
+  <input id="email" placeholder="Email">
+  <input id="password" type="password" placeholder="Password">
+  <button onclick="register()">Registrarse</button>
+  <button onclick="login()">Login</button>
+</div>
+
+<div class="container" id="app" style="display:none">
+  <h2>Panel</h2>
+  <button onclick="logout()">Cerrar sesión</button>
+
+  <h3>Misiones</h3>
+  <div class="card">
+    <button onclick="completeMission()">Completar misión (+20 pts)</button>
+  </div>
+
+  <h3>Ranking</h3>
+  <div id="ranking"></div>
+
+  <h3>Recompensas</h3>
+  <div id="rewards"></div>
+
+  <h3>Historial</h3>
+  <div id="history"></div>
+
+  <div id="adminPanel" style="display:none">
+    <h3>Admin: Crear recompensa</h3>
+    <input id="rewardName" placeholder="Nombre">
+    <input id="rewardCost" type="number" placeholder="Costo">
+    <button onclick="addReward()">Crear</button>
+    <h3>Sorteo Automático</h3>
+    <button onclick="runDraw()">Elegir ganador</button>
+    <p id="winner"></p>
+  </div>
+</div>
+
+<script>
+  const firebaseConfig = {
+    apiKey: "TU_API_KEY",
+    authDomain:"TU_DOMINIO.firebaseapp.com",
+    projectId: "TU_PROJECT_ID"
+  };
+
+  firebase.initializeApp(firebaseConfig);
+  const auth = firebase.auth();
+  const db = firebase.firestore();
+
+  let currentUser;
+  const email = document.getElementById("email");
+  const password = document.getElementById("password");
+  const authDiv = document.getElementById("auth");
+  const app = document.getElementById("app");
+  const ranking = document.getElementById("ranking");
+  const rewards = document.getElementById("rewards");
+  const history = document.getElementById("history");
+  const adminPanel = document.getElementById("adminPanel");
+  const rewardName = document.getElementById("rewardName");
+  const rewardCost = document.getElementById("rewardCost");
+  const winner = document.getElementById("winner");
+
+  function register() {
+    auth.createUserWithEmailAndPassword(email.value, password.value)
+      .then(user => {
+        db.collection("users").doc(user.user.uid).set({ points:0, role:"user" });
+      })
+      .catch(e => alert(e.message));
+  }
+
+  function login() {
+    auth.signInWithEmailAndPassword(email.value, password.value)
+      .catch(e => alert(e.message));
+  }
+
+  function logout() { auth.signOut(); }
+
+  auth.onAuthStateChanged(user => {
+    if(user){
+      currentUser = user;
+      authDiv.style.display="none";
+      app.style.display="block";
+      loadData();
+    }
+  });
+
+  function completeMission(){
+    db.collection("users").doc(currentUser.uid).update({ points: firebase.firestore.FieldValue.increment(20) });
+  }
+
+  function addReward(){
+    if(!rewardName.value || !rewardCost.value) return alert("Rellena todo");
+    db.collection("rewards").add({ name:rewardName.value, cost:parseInt(rewardCost.value) });
+    rewardName.value=""; rewardCost.value="";
+  }
+
+  function loadData(){
+    db.collection("users").onSnapshot(snapshot=>{
+      let users=[];
+      snapshot.forEach(doc=>users.push({id:doc.id,...doc.data()}));
+      users.sort((a,b)=>b.points-a.points);
+      ranking.innerHTML=users.map(u=>`<div class='card'>${u.id} - ${u.points} pts</div>`).join('');
+    });
+
+    db.collection("rewards").onSnapshot(snapshot=>{
+      rewards.innerHTML = snapshot.docs.map(doc=>{
+        const r = doc.data();
+        return `<div class='card'>${r.name} - ${r.cost} pts <button onclick="redeem('${doc.id}', ${r.cost}, '${r.name}')">Canjear</button></div>`
+      }).join('');
+    });
+
+    db.collection("history").where("user","==",currentUser.uid).onSnapshot(snapshot=>{
+      history.innerHTML = snapshot.docs.map(doc=>`<div class='card'>${doc.data().reward}</div>`).join('');
+    });
+
+    db.collection("users").doc(currentUser.uid).get().then(doc=>{
+      if(doc.data().role==="admin") adminPanel.style.display="block";
+    });
+  }
+
+  function redeem(id, cost, name){
+    const userRef = db.collection("users").doc(currentUser.uid);
+    db.runTransaction(async t=>{
+      const doc = await t.get(userRef);
+      if(doc.data().points >= cost){
+        t.update(userRef, { points: doc.data().points - cost });
+        db.collection("history").add({ user: currentUser.uid, reward: name });
+        alert("Canjeado!");
+      } else alert("No tienes puntos");
+    });
+  }
+
+  function runDraw(){
+    db.collection("users").get().then(snapshot=>{
+      const allUsers = snapshot.docs.map(d=>d.id);
+      if(allUsers.length===0) return alert("No hay usuarios para sortear");
+      const winnerId = allUsers[Math.floor(Math.random()*allUsers.length)];
+      winner.innerText = `Ganador: ${winnerId}`;
+    });
+  }
+</script>
+
+</body>
+</html>
